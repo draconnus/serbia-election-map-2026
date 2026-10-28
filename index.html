@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="sr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Изборни резултати — мапа</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  html, body { margin: 0; height: 100%; font: 14px/1.4 system-ui, -apple-system, sans-serif; }
+  #map { position: absolute; inset: 0; }
+  .panel { position: absolute; z-index: 1000; background: #fff; border-radius: 8px;
+           box-shadow: 0 2px 10px rgba(0,0,0,.25); padding: 10px 12px; }
+  #controls { top: 10px; left: 50px; }
+  #controls h1 { font-size: 15px; margin: 0 0 8px; }
+  .seg { display: inline-flex; border: 1px solid #bbb; border-radius: 6px; overflow: hidden; }
+  .seg button { border: 0; background: #f4f4f4; padding: 6px 10px; cursor: pointer; font: inherit; }
+  .seg button + button { border-left: 1px solid #bbb; }
+  .seg button.on { background: #222; color: #fff; }
+  #pctParty { margin-left: 6px; }
+  #pctParty.hidden { display: none; }
+  #summary { margin-top: 8px; font-size: 12px; color: #333; }
+  #summary b { font-variant-numeric: tabular-nums; }
+  #legend { bottom: 24px; right: 10px; font-size: 12px; }
+  #legend .row { display: flex; align-items: center; gap: 6px; }
+  #legend i { width: 18px; height: 12px; display: inline-block; border: 1px solid #0003; }
+  #hint { bottom: 24px; left: 10px; font-size: 12px; color: #444; max-width: 280px; }
+  .tip table { border-collapse: collapse; font-size: 12px; }
+  .tip td { padding: 1px 6px 1px 0; }
+  .tip td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .tip h3 { margin: 0 0 4px; font-size: 14px; }
+  .tip .muted { color: #777; font-size: 11px; }
+  .bar { height: 8px; display: flex; border-radius: 3px; overflow: hidden; margin: 4px 0 6px; width: 220px; }
+  @media (max-width: 700px) {
+    #controls { left: 50px; right: 10px; padding: 8px; }
+    #controls h1 { font-size: 13px; }
+    #hint { display: none; }
+  }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div id="controls" class="panel">
+  <h1>Парламентарни избори 2026 — резултати</h1>
+  <div class="seg" id="mode">
+    <button data-mode="total" class="on">Укупно гласова</button>
+    <button data-mode="pct">Проценат</button>
+  </div>
+  <div class="seg hidden" id="pctParty">
+    <button data-party="students" class="on">Студенти</button>
+    <button data-party="sns">СНС</button>
+  </div>
+  <div id="summary"></div>
+</div>
+<div id="legend" class="panel"></div>
+<div id="hint" class="panel">Земље су обојене збирно. Зумирајте (≥ 6) за градове/општине — величина круга = број гласалих.</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="data.js"></script>
+<script src="shapes.js"></script>
+<script>
+const D = window.ELECTION_DATA;
+const SNS_I = +D.sns.split('_')[1] - 1, STU_I = +D.students.split('_')[1] - 1;
+const TOWN_ZOOM = 6;
+const COLORS = { students: '#c0392b', sns: '#1f4e9c', total: '#2a7f62' };
+const state = { mode: 'total', party: 'students' };
+
+const fmt = n => n.toLocaleString('sr-RS');
+const pct = (a, b) => b ? (100 * a / b) : 0;
+const pfmt = v => v.toFixed(1).replace('.', ',') + '%';
+
+// ColorBrewer 9-class sequential palettes.
+const PALETTES = {
+  students: ['#fff5f0','#fee0d2','#fcbba1','#fc9272','#fb6a4a','#ef3b2c','#cb181d','#a50f15','#67000d'],
+  sns: ['#f7fbff','#deebf7','#c6dbef','#9ecae1','#6baed6','#4292c6','#2171b5','#08519c','#08306b'],
+  total: ['#f7fcf5','#e5f5e0','#c7e9c0','#a1d99b','#74c476','#41ab5d','#238b45','#006d2c','#00441b'],
+};
+function ramp(name, t) {
+  const p = PALETTES[name];
+  return p[Math.round(Math.max(0, Math.min(1, t)) * (p.length - 1))];
+}
+
+const PCT_STEPS = [0, 10, 20, 30, 40, 50, 60, 70, 80];
+function pctColor(p) {
+  let i = PCT_STEPS.length - 1;
+  while (i > 0 && p < PCT_STEPS[i]) i--;
+  return PALETTES[state.party][i];
+}
+
+function logScale(values) {
+  const v = values.filter(x => x > 0);
+  const lo = Math.log10(Math.min(...v)), hi = Math.log10(Math.max(...v));
+  return x => x > 0 ? (Math.log10(x) - lo) / ((hi - lo) || 1) : 0;
+}
+const countryScale = logScale(Object.values(D.countries).map(c => c.voted));
+const townScale = logScale(D.towns.map(t => t.voted));
+const maxTownVoted = Math.max(...D.towns.map(t => t.voted));
+
+function value(a) {
+  if (state.mode === 'total') return a.voted;
+  return pct(a.lists[state.party === 'sns' ? SNS_I : STU_I], a.valid);
+}
+function color(a, scale) {
+  if (state.mode === 'total') return ramp('total', scale(a.voted));
+  return pctColor(value(a));
+}
+
+function tooltip(name, a, extra = '') {
+  const sns = a.lists[SNS_I], stu = a.lists[STU_I], oth = a.valid - sns - stu;
+  const ps = pct(stu, a.valid), pn = pct(sns, a.valid);
+  return `<div class="tip"><h3>${name}</h3>${extra}
+    <div class="bar"><span style="width:${ps}%;background:${COLORS.students}"></span>
+    <span style="width:${pn}%;background:${COLORS.sns}"></span><span style="flex:1;background:#bbb"></span></div>
+    <table>
+    <tr><td>Гласало</td><td><b>${fmt(a.voted)}</b> / ${fmt(a.registered)}</td></tr>
+    <tr><td>Излазност</td><td>${pfmt(pct(a.voted, a.registered))}</td></tr>
+    <tr><td style="color:${COLORS.students}">● Студенти</td><td>${fmt(stu)} (${pfmt(ps)})</td></tr>
+    <tr><td style="color:${COLORS.sns}">● СНС</td><td>${fmt(sns)} (${pfmt(pn)})</td></tr>
+    <tr><td style="color:#888">● Остали</td><td>${fmt(oth)} (${pfmt(pct(oth, a.valid))})</td></tr>
+    <tr><td>Неважећи</td><td>${fmt(a.invalid)}</td></tr>
+    <tr><td>Бирачка места</td><td>${a.reported} / ${a.stations}</td></tr>
+    </table></div>`;
+}
+
+// --- Map ---
+const map = L.map('map', { worldCopyJump: true, minZoom: 2 }).setView([44.2, 20.9], 4);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 18, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+}).addTo(map);
+map.createPane('towns').style.zIndex = 450;
+
+let countryLayer, townLayer;
+const ccOf = f => f.properties.cc;
+const countryName = f => D.countries[ccOf(f)].name;
+
+function countryStyle(f) {
+  const a = D.countries[ccOf(f)];
+  const zoomed = map.getZoom() >= TOWN_ZOOM;
+  return { weight: 1, color: '#333', fillColor: color(a, countryScale),
+           fillOpacity: zoomed ? 0.25 : 0.75 };
+}
+
+countryLayer = L.geoJSON(window.COUNTRY_SHAPES, {
+  style: countryStyle,
+  onEachFeature: (f, layer) => {
+    const a = D.countries[ccOf(f)];
+    layer.bindTooltip(() => tooltip(countryName(f), a), { sticky: true });
+    layer.on('click', () => map.getZoom() < TOWN_ZOOM && map.fitBounds(layer.getBounds(), { maxZoom: 7 }));
+  }
+}).addTo(map);
+
+townLayer = L.layerGroup(D.towns.slice().sort((a, b) => b.voted - a.voted).map(t => {
+  const m = L.circleMarker(t.ll, { pane: 'towns', weight: 1, color: '#222', fillOpacity: 0.85 });
+  m._town = t;
+  const extra = `<div class="muted">${t.region}${t.approx ? ' · локација приближна' : ''}</div>`;
+  m.bindTooltip(() => tooltip(t.name, t, extra), { sticky: true });
+  return m;
+}));
+
+function styleTowns() {
+  const z = map.getZoom();
+  townLayer.eachLayer(m => {
+    const t = m._town;
+    m.setRadius(Math.max(3, Math.sqrt(t.voted / maxTownVoted) * 28 * Math.pow(1.25, z - TOWN_ZOOM)));
+    m.setStyle({ fillColor: color(t, townScale) });
+  });
+}
+
+function refresh() {
+  const showTowns = map.getZoom() >= TOWN_ZOOM;
+  if (showTowns && !map.hasLayer(townLayer)) townLayer.addTo(map);
+  if (!showTowns && map.hasLayer(townLayer)) map.removeLayer(townLayer);
+  if (countryLayer) countryLayer.setStyle(countryStyle);
+  styleTowns();
+  legend();
+}
+map.on('zoomend', refresh);
+
+// --- Controls ---
+document.querySelectorAll('#mode button').forEach(b => b.onclick = () => {
+  state.mode = b.dataset.mode;
+  document.querySelectorAll('#mode button').forEach(x => x.classList.toggle('on', x === b));
+  document.getElementById('pctParty').classList.toggle('hidden', state.mode !== 'pct');
+  refresh();
+});
+document.querySelectorAll('#pctParty button').forEach(b => b.onclick = () => {
+  state.party = b.dataset.party;
+  document.querySelectorAll('#pctParty button').forEach(x => x.classList.toggle('on', x === b));
+  refresh();
+});
+
+function legend() {
+  const el = document.getElementById('legend');
+  if (state.mode === 'total') {
+    const vals = map.getZoom() >= TOWN_ZOOM ? D.towns.map(t => t.voted) : Object.values(D.countries).map(c => c.voted);
+    const lo = Math.min(...vals.filter(v => v > 0)), hi = Math.max(...vals);
+    const steps = [0, 0.25, 0.5, 0.75, 1].map(t => Math.round(Math.pow(10, Math.log10(lo) + t * (Math.log10(hi) - Math.log10(lo)))));
+    el.innerHTML = '<b>Гласало (лог. скала)</b>' + steps.map((v, i) =>
+      `<div class="row"><i style="background:${ramp('total', i / 4)}"></i>${fmt(v)}</div>`).join('');
+  } else {
+    const label = state.party === 'sns' ? 'СНС' : 'Студенти';
+    el.innerHTML = `<b>% ${label} (од важећих)</b>` + PCT_STEPS.slice().reverse().map((s, i, arr) =>
+      `<div class="row"><i style="background:${pctColor(s)}"></i>${i === 0 ? '≥ ' + s : s + '–' + arr[i - 1]}%</div>`).join('');
+  }
+}
+
+const T = D.total;
+document.getElementById('summary').innerHTML =
+  `Обрађено <b>${T.reported}</b> / ${T.stations} бирачких места · гласало <b>${fmt(T.voted)}</b> (${pfmt(pct(T.voted, T.registered))})<br>
+   <span style="color:${COLORS.students}">● Студенти <b>${pfmt(pct(T.lists[STU_I], T.valid))}</b></span> &nbsp;
+   <span style="color:${COLORS.sns}">● СНС <b>${pfmt(pct(T.lists[SNS_I], T.valid))}</b></span>`;
+
+refresh();
+</script>
+</body>
+</html>
