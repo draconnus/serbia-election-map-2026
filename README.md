@@ -4,7 +4,7 @@ Interactive Leaflet + OpenStreetMap map of RIK polling-station results.
 
 - **World view:** countries (Serbia, Kosovo and Metohija, 38 diaspora countries) shaded by aggregated results.
 - **Zoom ≥ 6:** circles per municipality / diaspora city, sized by number of voters.
-- **Modes:** total voters, or % for Студенти (lista_3) / СНС (lista_1) of valid votes.
+- **Map shading:** total voters on a logarithmic scale. Result details retain vote counts and percentages for Студенти (lista_3) / СНС (lista_1).
 
 ## Rebuild
 
