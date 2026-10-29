@@ -12,6 +12,8 @@
            box-shadow: 0 2px 10px rgba(0,0,0,.25); padding: 10px 12px; }
   #controls { top: 10px; left: 50px; }
   #controls h1 { font-size: 15px; margin: 0 0 8px; }
+  #metric { width: 100%; margin-top: 4px; }
+  .control-label { display: block; font-size: 12px; color: #555; }
   #summary { margin-top: 8px; font-size: 12px; color: #333; }
   #summary b { font-variant-numeric: tabular-nums; }
   #legend { bottom: 24px; right: 10px; font-size: 12px; }
@@ -23,6 +25,8 @@
   .tip td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
   .tip h3 { margin: 0 0 4px; font-size: 14px; }
   .tip .muted { color: #777; font-size: 11px; }
+  .tip .source { margin-top: 5px; max-width: 250px; }
+  .tip a, #summary a { color: #3566a8; }
   .bar { height: 8px; display: flex; border-radius: 3px; overflow: hidden; margin: 4px 0 6px; width: 220px; }
   @media (max-width: 700px) {
     #controls { left: 50px; right: 10px; padding: 8px; }
@@ -36,23 +40,52 @@
 
 <div id="controls" class="panel">
   <h1>Парламентарни избори 2026 — резултати</h1>
+  <label class="control-label" for="metric">Бојење земаља</label>
+  <select id="metric">
+    <option value="votes">Број гласалих</option>
+    <option value="votesPerCapita">Гласало на 100.000 становника</option>
+    <option value="serbianShare">Пореклом из Србије на 100.000 становника</option>
+  </select>
   <div id="summary"></div>
 </div>
 <div id="legend" class="panel"></div>
-<div id="hint" class="panel">Земље су обојене збирно. Зумирајте (≥ 6) за градове/општине — величина круга = број гласалих.</div>
+<div id="hint" class="panel">Земље су обојене по изабраном показатељу. Зумирајте (≥ 6) за градове/општине — величина и боја круга = број гласалих.</div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="data.js"></script>
+<script src="demographics.js"></script>
 <script src="shapes.js"></script>
 <script>
 const D = window.ELECTION_DATA;
+const DEMO = window.COUNTRY_DEMOGRAPHICS;
 const SNS_I = +D.sns.split('_')[1] - 1, STU_I = +D.students.split('_')[1] - 1;
 const TOWN_ZOOM = 6;
 const COLORS = { students: '#c0392b', sns: '#1f4e9c', total: '#2a7f62' };
+const METRICS = {
+  votes: {
+    label: 'Гласало (лог. скала)',
+    value: (a) => a.voted,
+    format: fmtLegend
+  },
+  votesPerCapita: {
+    label: 'Гласало на 100.000 становника (лог. скала)',
+    value: (a, demo) => demo ? a.voted / demo.hostPopulation * 100000 : null,
+    format: metricFmt
+  },
+  serbianShare: {
+    label: 'Пореклом из Србије на 100.000 становника (лог. скала)',
+    value: (a, demo) => demo?.serbiaOriginPopulation == null ? null :
+      demo.serbiaOriginPopulation / demo.hostPopulation * 100000,
+    format: metricFmt
+  }
+};
 
 const fmt = n => n.toLocaleString('sr-RS');
 const pct = (a, b) => b ? (100 * a / b) : 0;
 const pfmt = v => v.toFixed(1).replace('.', ',') + '%';
+function fmtLegend(v) { return fmt(Math.round(v)); }
+function metricFmt(v) { return v < 1 ? v.toFixed(2).replace('.', ',') : fmt(Math.round(v)); }
+const rateFmt = v => v.toFixed(1).replace('.', ',');
 
 // ColorBrewer 9-class sequential palettes.
 const PALETTES = {
@@ -64,21 +97,40 @@ function ramp(name, t) {
 }
 
 function logScale(values) {
-  const v = values.filter(x => x > 0);
+  const v = values.filter(x => Number.isFinite(x) && x > 0);
+  if (!v.length) return () => 0;
   const lo = Math.log10(Math.min(...v)), hi = Math.log10(Math.max(...v));
   return x => x > 0 ? (Math.log10(x) - lo) / ((hi - lo) || 1) : 0;
 }
-const countryScale = logScale(Object.values(D.countries).map(c => c.voted));
 const townScale = logScale(D.towns.map(t => t.voted));
 const maxTownVoted = Math.max(...D.towns.map(t => t.voted));
+let metricName = 'votes';
+let countryScale;
 
-function color(a, scale) {
-  return ramp('total', scale(a.voted));
+function metricValue(cc) {
+  return METRICS[metricName].value(D.countries[cc], DEMO.countries[cc]);
 }
 
-function tooltip(name, a, extra = '') {
+function updateCountryScale() {
+  countryScale = logScale(Object.keys(D.countries).map(metricValue));
+}
+
+function countryColor(cc) {
+  const value = metricValue(cc);
+  return value == null ? '#d9d9d9' : ramp('total', countryScale(value));
+}
+
+updateCountryScale();
+
+function tooltip(name, a, extra = '', cc = null) {
   const sns = a.lists[SNS_I], stu = a.lists[STU_I], oth = a.valid - sns - stu;
   const ps = pct(stu, a.valid), pn = pct(sns, a.valid);
+  const demo = cc ? DEMO.countries[cc] : null;
+  const demographicRows = demo ? `
+    <tr><td>Становника (${DEMO.year})</td><td>${fmt(demo.hostPopulation)}</td></tr>
+    <tr><td>Гласало / 100.000</td><td>${rateFmt(a.voted / demo.hostPopulation * 100000)}</td></tr>
+    <tr><td>Пореклом из Србије</td><td>${demo.serbiaOriginPopulation == null ? 'није издвојено' : fmt(demo.serbiaOriginPopulation)}</td></tr>` : '';
+  const source = demo ? `<div class="muted source">UN процене за ${DEMO.year}: <a href="${DEMO.source.population.url}" target="_blank">становништво</a> · <a href="${DEMO.source.serbiaOrigin.url}" target="_blank">мигранти пореклом из Србије</a></div>` : '';
   return `<div class="tip"><h3>${name}</h3>${extra}
     <div class="bar"><span style="width:${ps}%;background:${COLORS.students}"></span>
     <span style="width:${pn}%;background:${COLORS.sns}"></span><span style="flex:1;background:#bbb"></span></div>
@@ -90,7 +142,8 @@ function tooltip(name, a, extra = '') {
     <tr><td style="color:#888">● Остали</td><td>${fmt(oth)} (${pfmt(pct(oth, a.valid))})</td></tr>
     <tr><td>Неважећи</td><td>${fmt(a.invalid)}</td></tr>
     <tr><td>Бирачка места</td><td>${a.reported} / ${a.stations}</td></tr>
-    </table></div>`;
+    ${demographicRows}
+    </table>${source}</div>`;
 }
 
 // --- Map ---
@@ -105,9 +158,8 @@ const ccOf = f => f.properties.cc;
 const countryName = f => D.countries[ccOf(f)].name;
 
 function countryStyle(f) {
-  const a = D.countries[ccOf(f)];
   const zoomed = map.getZoom() >= TOWN_ZOOM;
-  return { weight: 1, color: '#333', fillColor: color(a, countryScale),
+  return { weight: 1, color: '#333', fillColor: countryColor(ccOf(f)),
            fillOpacity: zoomed ? 0.25 : 0.75 };
 }
 
@@ -115,7 +167,7 @@ countryLayer = L.geoJSON(window.COUNTRY_SHAPES, {
   style: countryStyle,
   onEachFeature: (f, layer) => {
     const a = D.countries[ccOf(f)];
-    layer.bindTooltip(() => tooltip(countryName(f), a), { sticky: true });
+    layer.bindTooltip(() => tooltip(countryName(f), a, '', ccOf(f)), { sticky: true });
     layer.on('click', () => map.getZoom() < TOWN_ZOOM && map.fitBounds(layer.getBounds(), { maxZoom: 7 }));
   }
 }).addTo(map);
@@ -133,7 +185,7 @@ function styleTowns() {
   townLayer.eachLayer(m => {
     const t = m._town;
     m.setRadius(Math.max(3, Math.sqrt(t.voted / maxTownVoted) * 28 * Math.pow(1.25, z - TOWN_ZOOM)));
-    m.setStyle({ fillColor: color(t, townScale) });
+    m.setStyle({ fillColor: ramp('total', townScale(t.voted)) });
   });
 }
 
@@ -149,12 +201,20 @@ map.on('zoomend', refresh);
 
 function legend() {
   const el = document.getElementById('legend');
-  const vals = map.getZoom() >= TOWN_ZOOM ? D.towns.map(t => t.voted) : Object.values(D.countries).map(c => c.voted);
-  const lo = Math.min(...vals.filter(v => v > 0)), hi = Math.max(...vals);
-  const steps = [0, 0.25, 0.5, 0.75, 1].map(t => Math.round(Math.pow(10, Math.log10(lo) + t * (Math.log10(hi) - Math.log10(lo)))));
-  el.innerHTML = '<b>Гласало (лог. скала)</b>' + steps.map((v, i) =>
-    `<div class="row"><i style="background:${ramp('total', i / 4)}"></i>${fmt(v)}</div>`).join('');
+  const metric = METRICS[metricName];
+  const vals = Object.keys(D.countries).map(metricValue).filter(v => Number.isFinite(v) && v > 0);
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  const steps = [0, 0.25, 0.5, 0.75, 1].map(t => Math.pow(10, Math.log10(lo) + t * (Math.log10(hi) - Math.log10(lo))));
+  el.innerHTML = `<b>${metric.label}</b>` + steps.map((v, i) =>
+    `<div class="row"><i style="background:${ramp('total', i / 4)}"></i>${metric.format(v)}</div>`).join('') +
+    (metricName === 'serbianShare' ? '<div class="row"><i style="background:#d9d9d9"></i>нема издвојеног податка</div>' : '');
 }
+
+document.getElementById('metric').addEventListener('change', event => {
+  metricName = event.target.value;
+  updateCountryScale();
+  refresh();
+});
 
 const T = D.total;
 document.getElementById('summary').innerHTML =
