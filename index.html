@@ -86,6 +86,8 @@ const pfmt = v => v.toFixed(1).replace('.', ',') + '%';
 function fmtLegend(v) { return fmt(Math.round(v)); }
 function metricFmt(v) { return v < 1 ? v.toFixed(2).replace('.', ',') : fmt(Math.round(v)); }
 const rateFmt = v => v.toFixed(1).replace('.', ',');
+const populationRate = (population, hostPopulation) =>
+  population == null ? 'није издвојено' : rateFmt(population / hostPopulation * 100000);
 
 // ColorBrewer 9-class sequential palettes.
 const PALETTES = {
@@ -126,11 +128,13 @@ function tooltip(name, a, extra = '', cc = null) {
   const sns = a.lists[SNS_I], stu = a.lists[STU_I], oth = a.valid - sns - stu;
   const ps = pct(stu, a.valid), pn = pct(sns, a.valid);
   const demo = cc ? DEMO.countries[cc] : null;
+  const exYugoslaviaPopulation = cc ? DEMO.exYugoslaviaOriginPopulation[cc] : null;
   const demographicRows = demo ? `
     <tr><td>Становника (${DEMO.year})</td><td>${fmt(demo.hostPopulation)}</td></tr>
     <tr><td>Гласало / 100.000</td><td>${rateFmt(a.voted / demo.hostPopulation * 100000)}</td></tr>
-    <tr><td>Пореклом из Србије</td><td>${demo.serbiaOriginPopulation == null ? 'није издвојено' : fmt(demo.serbiaOriginPopulation)}</td></tr>` : '';
-  const source = demo ? `<div class="muted source">UN процене за ${DEMO.year}: <a href="${DEMO.source.population.url}" target="_blank">становништво</a> · <a href="${DEMO.source.serbiaOrigin.url}" target="_blank">мигранти пореклом из Србије</a></div>` : '';
+    <tr><td>Пореклом из Србије / 100.000</td><td>${populationRate(demo.serbiaOriginPopulation, demo.hostPopulation)}</td></tr>
+    <tr><td>Србија + Хрватска + БиХ + ЦГ / 100.000</td><td>${populationRate(exYugoslaviaPopulation, demo.hostPopulation)}</td></tr>` : '';
+  const source = demo ? `<div class="muted source">UN процене за ${DEMO.year}: <a href="${DEMO.source.population.url}" target="_blank">становништво</a> · <a href="${DEMO.source.serbiaOrigin.url}" target="_blank">мигранти по земљи порекла</a></div>` : '';
   return `<div class="tip"><h3>${name}</h3>${extra}
     <div class="bar"><span style="width:${ps}%;background:${COLORS.students}"></span>
     <span style="width:${pn}%;background:${COLORS.sns}"></span><span style="flex:1;background:#bbb"></span></div>
